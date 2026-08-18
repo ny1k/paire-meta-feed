@@ -1,0 +1,62 @@
+name: Build & publish feed
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # hourly, at 7 minutes past (avoids top-of-hour congestion)
+  workflow_dispatch: {}    # the manual "Run workflow" button
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two runs overwrite each other; never cancel a publish in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      # generate_feed.py exits non-zero (failing this run BEFORE anything is
+      # published) if fewer than 1,000 items are generated — protects against
+      # a Shopify API hiccup publishing a near-empty feed.
+      - name: Generate feed
+        env:
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+        run: python generate_feed.py
+
+      - name: Stage site
+        run: |
+          mkdir -p _site
+          cp feed.xml _site/feed.xml
+          echo '<!doctype html><title>Paire Meta feed</title><p>The feed lives at <a href="feed.xml">feed.xml</a>.' > _site/index.html
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
