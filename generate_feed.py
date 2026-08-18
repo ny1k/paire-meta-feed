@@ -304,6 +304,11 @@ def variant_colour(variant, product):
     return variant["title"].split("/")[0].strip()
 
 
+def has_colour_option(product):
+    return any(o["name"].strip().lower() in ("color", "colour")
+               for o in product["options"])
+
+
 class TaggedMedia:
     """One media entry (image or video) with its parsed alt tokens."""
 
@@ -406,9 +411,14 @@ def build_item(variant, product, media, known_colours):
         return None  # nothing usable at all (product with zero media)
 
     # ---- g:additional_image_link ------------------------------------------
-    gallery = [m.url for m in images if m.matches_colour(colour)]
-    if len(gallery) < 2:
-        gallery += [m.url for m in images if m.is_untagged(known_colours)]
+    # Colour-option products get a colour-curated gallery; products with no
+    # colour concept carry the full gallery (user decision 2026-08-18).
+    if has_colour_option(product):
+        gallery = [m.url for m in images if m.matches_colour(colour)]
+        if len(gallery) < 2:
+            gallery += [m.url for m in images if m.is_untagged(known_colours)]
+    else:
+        gallery = [m.url for m in images]
     seen = {image_link}
     additional = []
     for url in gallery:

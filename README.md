@@ -51,6 +51,11 @@ Three ways, all done in Shopify admin — never in this repository:
   For each variant the feed prefers a portrait image tagged for its colour,
   then any image tagged for its colour, then the variant's own image.
 
+The gallery (`additional_image_link`, the Shops carousel): products **with**
+a Color/Colour option get a colour-curated gallery (images tagged for that
+colour or `[global]`); products **without** a colour option carry the full
+product gallery. Capped at 20, main image never duplicated.
+
 Changes take effect at the next hourly rebuild (or force one, above).
 
 ## If you see a red ❌ in the Actions tab
