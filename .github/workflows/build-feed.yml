@@ -41,7 +41,8 @@ jobs:
         run: |
           mkdir -p _site
           cp feed.xml _site/feed.xml
-          echo '<!doctype html><title>Paire Meta feed</title><p>The feed lives at <a href="feed.xml">feed.xml</a>.' > _site/index.html
+          cp feed_google.xml _site/feed_google.xml
+          echo '<!doctype html><title>Paire feeds</title><p>Meta: <a href="feed.xml">feed.xml</a> &middot; Google: <a href="feed_google.xml">feed_google.xml</a>' > _site/index.html
 
       - uses: actions/configure-pages@v5
         with:

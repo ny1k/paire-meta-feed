@@ -61,6 +61,17 @@ CHANNEL_LINK = "https://www.paire.com"
 
 OUTPUT_FILE = "feed.xml"
 
+# --- Google Merchant Center supplemental feed --------------------------------
+# Same image rules as the Meta feed, but emits ONLY g:image_link ("emit only
+# the fields we intend to win" — and never custom_label_*, which Google Ads
+# campaigns may use for segmentation). Each variant appears under BOTH offer-id
+# schemes found in GMC account 288154111 (feed label AU); whichever source the
+# feed is attached to simply ignores ids it doesn't hold:
+#   shopify_AU_{productId}_{variantId}   -> "Shopify App API" source
+#   {productId}_{lowercased sku}         -> "Found by Google" crawl source
+GOOGLE_OUTPUT_FILE = "feed_google.xml"
+GOOGLE_ID_PREFIX = "shopify_AU"
+
 # Variant metafields that act as manual overrides (namespace.key):
 META_IMAGE = ("flexify", "image_link")   # single URL, used verbatim
 META_VIDEO = ("flexify", "video")        # comma-separated URLs, used verbatim
@@ -205,6 +216,7 @@ query ProductDetail($id: ID!) {
       nodes {
         id
         title
+        sku
         selectedOptions { name value }
         image { url }
         imageOverride: metafield(namespace: "%s", key: "%s") { value }
@@ -444,6 +456,7 @@ def build_item(variant, product, media, known_colours):
     return {
         "id": numeric_gid(variant["id"]),
         "product_id": numeric_gid(product["id"]),
+        "sku": (variant.get("sku") or "").strip(),
         "product_title": product["title"],
         "variant_title": variant["title"],
         "colour": colour,
@@ -511,6 +524,39 @@ def write_feed(items, path):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(content)
     print(f"wrote {path}: {len(items)} items, {len(content) / 1e6:.1f} MB")
+
+
+def google_ids(item):
+    """The offer ids this variant may hold in Google Merchant Center."""
+    ids = [f"{GOOGLE_ID_PREFIX}_{item['product_id']}_{item['id']}"]
+    if item["sku"]:
+        ids.append(f"{item['product_id']}_{item['sku'].lower()}")
+    return ids
+
+
+def write_google_feed(items, path):
+    lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<rss xmlns:g="http://base.google.com/ns/1.0" version="2.0">',
+        "  <channel>",
+        f"    <title>{CHANNEL_TITLE}</title>",
+        f"    <link>{CHANNEL_LINK}</link>",
+    ]
+    rows = 0
+    for item in items:
+        for gid in google_ids(item):
+            lines.append("<item>")
+            lines.append(f" <g:id>{gid}</g:id>")
+            lines.append(
+                f" <g:image_link>{cdata(item['image_link'])}</g:image_link>")
+            lines.append("</item>")
+            rows += 1
+    lines += ["  </channel>", "</rss>", ""]
+    content = "\n".join(lines)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    print(f"wrote {path}: {rows} rows ({len(items)} variants x id schemes), "
+          f"{len(content) / 1e6:.1f} MB")
 
 
 # ============================================================================
@@ -581,6 +627,19 @@ def run_checks(items, flexify_path=None):
         check(True, "feed.xml parses cleanly")
     except ET.ParseError as exc:
         check(False, f"feed.xml parse error: {exc}")
+
+    try:
+        tree = ET.parse(GOOGLE_OUTPUT_FILE)
+        g_ns = "{http://base.google.com/ns/1.0}"
+        rows = [e.text for e in tree.iter(g_ns + "id")]
+        expected = sum(len(google_ids(i)) for i in items)
+        check(len(rows) == expected,
+              f"feed_google.xml rows {len(rows)} == expected {expected}")
+        sample = set(google_ids(items[0]))
+        check(sample <= set(rows),
+              f"feed_google.xml carries both id schemes for first item")
+    except ET.ParseError as exc:
+        check(False, f"feed_google.xml parse error: {exc}")
 
     diff_against_flexify(by_id, flexify_path)
 
@@ -653,6 +712,7 @@ def main():
                  "API hiccup.")
 
     write_feed(items, OUTPUT_FILE)
+    write_google_feed(items, GOOGLE_OUTPUT_FILE)
 
     labels = {}
     for item in items:

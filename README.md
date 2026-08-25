@@ -78,6 +78,25 @@ the log. The common causes:
 - Anything else: re-run once before investigating; most one-off failures are
   network blips.
 
+## The Google Merchant Center feed
+
+The same build also publishes a **supplemental feed for Google Merchant
+Center** (account 288154111):
+
+```
+https://ny1k.github.io/paire-meta-feed/feed_google.xml
+```
+
+It applies the same image rules (meta tag → legacy metafield → first
+portrait/model shot for the colour) but emits **only** the main image —
+no galleries, no custom labels (Google Ads campaigns may use custom labels
+for segmentation, so we never touch them), and no link/price/title. Each
+variant appears twice, once per Google offer-id scheme
+(`shopify_AU_{productId}_{variantId}` for the Shopify app source and
+`{productId}_{sku}` for the "Found by Google" crawl source) — whichever
+source the feed is attached to ignores the ids it doesn't hold, exactly like
+Meta ignores unknown ids.
+
 ## Expected warnings in Meta
 
 This feed deliberately covers **more** items than Flexify did (it includes
