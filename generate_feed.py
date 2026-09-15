@@ -217,7 +217,6 @@ query ProductDetail($id: ID!) {
         id
         title
         sku
-        availableForSale
         selectedOptions { name value }
         image { url }
         imageOverride: metafield(namespace: "%s", key: "%s") { value }
@@ -457,8 +456,6 @@ def build_item(variant, product, media, known_colours):
     return {
         "id": numeric_gid(variant["id"]),
         "product_id": numeric_gid(product["id"]),
-        "availability": ("in stock" if variant.get("availableForSale")
-                         else "out of stock"),
         "sku": (variant.get("sku") or "").strip(),
         "product_title": product["title"],
         "variant_title": variant["title"],
@@ -521,8 +518,6 @@ def write_feed(items, path):
         lines.append(
             f" <g:custom_label_0>{cdata(item['custom_label_0'])}"
             "</g:custom_label_0>")
-        lines.append(
-            f" <g:availability>{cdata(item['availability'])}</g:availability>")
         lines.append("</item>")
     lines += ["  </channel>", "</rss>", ""]
     content = "\n".join(lines)
