@@ -62,7 +62,8 @@ CHANNEL_LINK = "https://www.paire.com"
 OUTPUT_FILE = "feed.xml"
 
 # --- Google Merchant Center supplemental feed --------------------------------
-# Same image rules as the Meta feed, but emits ONLY g:image_link ("emit only
+# One main image per colour (pick_single_image — not the Meta feed's per-size
+# rotation; user decision 2026-09-24). Emits ONLY g:image_link ("emit only
 # the fields we intend to win" — and never custom_label_*, which Google Ads
 # campaigns may use for segmentation). Each variant appears under BOTH offer-id
 # schemes found in GMC account 288154111 (feed label AU); whichever source the
@@ -274,15 +275,16 @@ def fetch_products(client):
 # Alt text is comma-separated tokens. [portrait] marks a lifestyle/on-model
 # shot, [global] applies to every colourway; stripping all [bracketed]
 # segments from a token leaves a colour name. A token that is just the word
-# "meta" designates this image as the MAIN image for the colours named in
-# the same alt (or all colours with [global]) — the go-forward manual pick,
-# outranking even the legacy flexify.image_link metafield. Examples:
+# "meta" puts this image FIRST for the colours named in the same alt (or all
+# colours with [global]): in the Meta feed it goes to the first size (several
+# meta images cover several sizes); in the Google feed it is the colour's one
+# main image. Examples:
 #   "[portrait]Snow"          lifestyle shot of Snow
 #   "Espresso[portrait],Blush" lifestyle for Espresso; plain tag for Blush
 #   "[portrait][global]"      lifestyle, applies to all colours
 #   "Navy"                    plain e-comm shot of Navy
-#   "Snow,meta"               main image for Snow variants
-#   "meta,[global]"           main image for every colourway
+#   "Snow,meta"               first in line for Snow's sizes
+#   "meta,[global]"           first in line for every colourway
 # ============================================================================
 
 BRACKET_RE = re.compile(r"\[([^\]]*)\]")
@@ -380,47 +382,87 @@ def metafield_value(variant, alias):
     return (mf or {}).get("value") or None
 
 
-def build_item(variant, product, media, known_colours):
-    colour = variant_colour(variant, product).lower()
-    images = [m for m in media if m.type == "MediaImage" and m.url]
-    videos = [m for m in media if m.type == "Video"]
-
-    # ---- g:image_link ------------------------------------------------------
-    image_link, label = None, None
-
+def pick_single_image(variant, images, colour):
+    """ONE main image shared by every size of a colour — the rule until
+    2026-09-24, still used for the Google feed. Returns (url, label) or
+    None."""
     # "meta"-tagged image for this colour: the go-forward manual pick,
     # outranking the legacy metafield (user decision 2026-08-18).
     meta_tagged = [m for m in images
                    if m.has_meta() and m.matches_colour(colour)]
     if meta_tagged:
-        image_link, label = meta_tagged[0].url, "override"
+        return meta_tagged[0].url, "override"
 
-    if not image_link:
-        override = metafield_value(variant, "imageOverride")
-        if override:
-            image_link, label = override.strip(), "override"
+    override = metafield_value(variant, "imageOverride")
+    if override:
+        return override.strip(), "override"
 
-    if not image_link:
-        solo = [m for m in images
-                if m.has_portrait_for(colour) and m.named_colours() <= {colour}]
-        multi = [m for m in images if m.has_portrait_for(colour)]
-        tagged = [m for m in images if m.matches_colour(colour)]
-        if solo:
-            image_link, label = solo[0].url, "lifestyle-rule"
-        elif multi:
-            image_link, label = multi[0].url, "lifestyle-rule"
-        elif tagged:
-            image_link, label = tagged[0].url, "ecomm-fallback"
+    solo = [m for m in images
+            if m.has_portrait_for(colour) and m.named_colours() <= {colour}]
+    multi = [m for m in images if m.has_portrait_for(colour)]
+    tagged = [m for m in images if m.matches_colour(colour)]
+    if solo:
+        return solo[0].url, "lifestyle-rule"
+    if multi:
+        return multi[0].url, "lifestyle-rule"
+    if tagged:
+        return tagged[0].url, "ecomm-fallback"
 
-    if not image_link:
-        own = (variant.get("image") or {}).get("url")
-        if own:
-            image_link, label = own, "ecomm-fallback"
-        elif images:
-            image_link, label = images[0].url, "ecomm-fallback"
+    own = (variant.get("image") or {}).get("url")
+    if own:
+        return own, "ecomm-fallback"
+    if images:
+        return images[0].url, "ecomm-fallback"
+    return None
 
-    if not image_link:
+
+def pick_size_image(images, colour, colour_product, size_index):
+    """A DIFFERENT main image for each size of a colour (user decision
+    2026-09-24; Meta feed only). Sizes follow Shopify's variant order and
+    take, in turn: this colour's "meta"-tagged images, then its other images
+    in media-gallery order. When a colour has more sizes than images, the
+    leftover sizes reuse its first image (the meta one, if any). Only images
+    whose alt NAMES the colour rotate — a [global] shot of another colour
+    never becomes a main image. Products without a colour option rotate
+    through their whole gallery. Returns (url, label), or None when the
+    colour has no tagged images at all (the caller then falls back to
+    pick_single_image: the flexify.image_link metafield, variant image...)."""
+    if colour_product:
+        meta = [m for m in images
+                if m.has_meta() and m.matches_colour(colour)]
+        pool = [m for m in images if colour in m.named_colours()]
+    else:
+        meta = [m for m in images if m.has_meta()]
+        pool = images
+    ordered, seen = [], set()
+    for m in meta + pool:
+        if m.url not in seen:
+            ordered.append(m)
+            seen.add(m.url)
+    if not ordered:
+        return None
+    chosen = ordered[size_index] if size_index < len(ordered) else ordered[0]
+    if chosen in meta:
+        return chosen.url, "override"
+    lifestyle = (chosen.has_portrait_for(colour) if colour_product
+                 else any(t.portrait for t in chosen.tokens))
+    return chosen.url, "lifestyle-rule" if lifestyle else "ecomm-fallback"
+
+
+def build_item(variant, product, media, known_colours, size_index):
+    colour = variant_colour(variant, product).lower()
+    images = [m for m in media if m.type == "MediaImage" and m.url]
+    videos = [m for m in media if m.type == "Video"]
+
+    # ---- g:image_link ------------------------------------------------------
+    # Meta gets a different image per size; Google keeps one per colour.
+    single = pick_single_image(variant, images, colour)
+    if not single:
         return None  # nothing usable at all (product with zero media)
+    image_link, label = (pick_size_image(images, colour,
+                                         has_colour_option(product),
+                                         size_index)
+                         or single)
 
     # ---- g:additional_image_link ------------------------------------------
     # Colour-option products get a colour-curated gallery; products with no
@@ -461,6 +503,7 @@ def build_item(variant, product, media, known_colours):
         "variant_title": variant["title"],
         "colour": colour,
         "image_link": image_link,
+        "google_image_link": single[0],
         "additional_image_link": additional,
         "videos": video_urls,
         "custom_label_0": label,
@@ -474,8 +517,17 @@ def build_items(products):
         known_colours = set()
         for v in product["variants"]["nodes"]:
             known_colours.add(variant_colour(v, product).lower())
+        # Each variant's position among its colour's sizes, in Shopify's
+        # variant order (a product with no colour option is one group).
+        colour_product = has_colour_option(product)
+        sizes_seen = {}
         for variant in product["variants"]["nodes"]:
-            item = build_item(variant, product, media, known_colours)
+            key = (variant_colour(variant, product).lower()
+                   if colour_product else None)
+            size_index = sizes_seen.get(key, 0)
+            sizes_seen[key] = size_index + 1
+            item = build_item(variant, product, media, known_colours,
+                              size_index)
             if item:
                 items.append(item)
             else:
@@ -548,7 +600,8 @@ def write_google_feed(items, path):
             lines.append("<item>")
             lines.append(f" <g:id>{gid}</g:id>")
             lines.append(
-                f" <g:image_link>{cdata(item['image_link'])}</g:image_link>")
+                f" <g:image_link>{cdata(item['google_image_link'])}"
+                "</g:image_link>")
             lines.append("</item>")
             rows += 1
     lines += ["  </channel>", "</rss>", ""]
@@ -568,6 +621,9 @@ EXPECTED_IMAGES = {
     "48563298009311": "CoolBlend55.jpg?v=1773303194",
     "50505110618335": "Cabin_Stay3.jpg?v=1783619564",
 }
+# Calf Sock Black S/M/L: four Black-tagged images, so each size gets its own.
+EXPECTED_DISTINCT_SIZES = ("35535847358628", "35535847391396",
+                           "35535847424164")
 EXPECTED_VIDEO_VARIANT = "47284620296415"
 EXPECTED_VIDEO_SUBSTRINGS = ("1fc30f58a64e4b52ad4843126334b4fd", "HD-1080p")
 # Verified 2026-08-18: 1,806 total variants = 235 on title-excluded products
@@ -598,9 +654,15 @@ def run_checks(items, flexify_path=None):
     print("\n=== Acceptance checks ===")
     for vid, expected in EXPECTED_IMAGES.items():
         item = by_id.get(vid)
-        actual = url_tail(item["image_link"]) if item else "(variant missing)"
+        actual = (url_tail(item["google_image_link"]) if item
+                  else "(variant missing)")
         check(item is not None and actual == expected,
-              f"variant {vid}: image_link {actual!r} (expect {expected!r})")
+              f"variant {vid}: one-per-colour image {actual!r} "
+              f"(expect {expected!r})")
+
+    trio = [by_id.get(vid) for vid in EXPECTED_DISTINCT_SIZES]
+    check(all(trio) and len({i["image_link"] for i in trio}) == len(trio),
+          "Calf Sock Black S/M/L carry three different Meta main images")
 
     item = by_id.get(EXPECTED_VIDEO_VARIANT)
     ok = item is not None and any(
@@ -649,7 +711,8 @@ def run_checks(items, flexify_path=None):
 
 
 def diff_against_flexify(by_id, flexify_path=None):
-    """Compare image_link for 20 random variants present in both feeds."""
+    """Compare our one-per-colour image (the rule Flexify followed) for 20
+    random variants present in both feeds."""
     print("\n=== Random-20 diff vs live Flexify feed ===")
     try:
         if flexify_path:
@@ -671,12 +734,12 @@ def diff_against_flexify(by_id, flexify_path=None):
     same = 0
     for vid in sample:
         ours, theirs = by_id[vid], flexify[vid]
-        if ours["image_link"] == theirs:
+        if ours["google_image_link"] == theirs:
             same += 1
             continue
         print(f"  DIFF {vid} ({ours['product_title']} / "
               f"{ours['variant_title']}) [{ours['custom_label_0']}]")
-        print(f"       ours:    {url_tail(ours['image_link'])}")
+        print(f"       ours:    {url_tail(ours['google_image_link'])}")
         print(f"       flexify: {url_tail(theirs)}")
     print(f"  {same}/{len(sample)} sampled items have identical image_link")
 

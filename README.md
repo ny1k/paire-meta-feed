@@ -32,24 +32,33 @@ merch team changes an image):
 
 ## Changing which image or video a variant uses
 
-Three ways, all done in Shopify admin — never in this repository:
+All done in Shopify admin — never in this repository.
 
-- **The `meta` tag (strongest — the go-forward tool):** in the image's alt
-  text, add the word `meta` as its own comma-separated token next to the
-  colour name, e.g. `Snow,meta` or `Espresso[portrait],meta` — that image
-  becomes the main image for that colour's variants. `meta,[global]` makes
-  it the main image for every colourway. First tagged image in media order
-  wins.
-- **Legacy manual override:** the variant metafield `flexify.image_link`
-  (~1,300 variants hold curated values from the Flexify era; they keep
-  working even after Flexify is uninstalled, because the data lives in the
-  store, not in the app). A `meta` tag outranks it. `flexify.video` works
-  the same way for videos, comma-separated URLs.
-- **Alt-text colour tagging:** otherwise the feed picks by the merch team's
-  existing convention — comma-separated colour names, `[portrait]` marking
-  a lifestyle/on-model shot, `[global]` meaning "applies to every colour".
-  For each variant the feed prefers a portrait image tagged for its colour,
-  then any image tagged for its colour, then the variant's own image.
+**Each size gets its own main image (Meta feed).** For every colour, the
+sizes — in Shopify's variant order (XS, S, M, …) — take that colour's
+images one each:
+
+1. first, any images tagged `meta` for that colour: add the word `meta` as
+   its own comma-separated token in the alt text, e.g. `Snow,meta` or
+   `Espresso[portrait],meta` (`meta,[global]` = every colourway). Tag
+   several to cover several sizes;
+2. then the colour's other images, **in media-gallery order** — so dragging
+   images into a new order in Shopify decides which size shows which picture.
+
+An image counts for a colour only if its alt text names that colour (the
+merch team's convention: comma-separated colour names, `[portrait]` marks a
+lifestyle/on-model shot, `[global]` means "applies to every colour" — but a
+`[global]` shot of *another* colour never becomes a main image). If a colour
+has fewer images than sizes, the leftover sizes reuse its first image (the
+`meta` one, if any) — so tag more images for that colour to give every size
+its own. Products **without** a colour option rotate through their whole
+gallery (untagged images included), `meta`-tagged ones first.
+
+**Fallbacks**, for a colour with no tagged images at all: the legacy variant
+metafield `flexify.image_link` (~1,300 variants hold Flexify-era values;
+they keep working after Flexify is uninstalled because the data lives in the
+store), then the variant's own image. `flexify.video` sets videos the same
+way, comma-separated URLs.
 
 The gallery (`additional_image_link`, the Shops carousel): products **with**
 a Color/Colour option get a colour-curated gallery (images tagged for that
@@ -87,8 +96,10 @@ Center** (account 288154111):
 https://ny1k.github.io/paire-meta-feed/feed_google.xml
 ```
 
-It applies the same image rules (meta tag → legacy metafield → first
-portrait/model shot for the colour) but emits **only** the main image —
+It keeps **one** main image per colour — not the Meta feed's per-size
+rotation (meta tag → legacy metafield → first portrait/model shot for the
+colour → any image tagged for it → the variant's own image) — and emits
+**only** that main image —
 no galleries, no custom labels (Google Ads campaigns may use custom labels
 for segmentation, so we never touch them), and no link/price/title. Each
 variant appears twice, once per Google offer-id scheme
