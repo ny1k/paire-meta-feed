@@ -351,13 +351,6 @@ class TaggedMedia:
     def named_colours(self):
         return {t.colour for t in self.tokens if t.colour}
 
-    def is_untagged(self, known_colours):
-        """No known colour name and no [global] marker — the alt grammar
-        doesn't apply to this media (empty alt, filenames, etc.)."""
-        if any(t.is_global for t in self.tokens):
-            return False
-        return not (self.named_colours() & known_colours)
-
 
 def pick_video_url(node):
     """Largest mp4 derivative <= MAX_VIDEO_HEIGHT from sources — never the
@@ -384,35 +377,36 @@ def metafield_value(variant, alias):
 
 def pick_single_image(variant, images, colour):
     """ONE main image shared by every size of a colour — the rule until
-    2026-09-24, still used for the Google feed. Returns (url, label) or
-    None."""
+    2026-09-24, still used for the Google feed. Returns (url, label,
+    untagged) or None — untagged is True when nothing tagged or picked
+    exists and it fell through to the variant image / first image."""
     # "meta"-tagged image for this colour: the go-forward manual pick,
     # outranking the legacy metafield (user decision 2026-08-18).
     meta_tagged = [m for m in images
                    if m.has_meta() and m.matches_colour(colour)]
     if meta_tagged:
-        return meta_tagged[0].url, "override"
+        return meta_tagged[0].url, "override", False
 
     override = metafield_value(variant, "imageOverride")
     if override:
-        return override.strip(), "override"
+        return override.strip(), "override", False
 
     solo = [m for m in images
             if m.has_portrait_for(colour) and m.named_colours() <= {colour}]
     multi = [m for m in images if m.has_portrait_for(colour)]
     tagged = [m for m in images if m.matches_colour(colour)]
     if solo:
-        return solo[0].url, "lifestyle-rule"
+        return solo[0].url, "lifestyle-rule", False
     if multi:
-        return multi[0].url, "lifestyle-rule"
+        return multi[0].url, "lifestyle-rule", False
     if tagged:
-        return tagged[0].url, "ecomm-fallback"
+        return tagged[0].url, "ecomm-fallback", False
 
     own = (variant.get("image") or {}).get("url")
     if own:
-        return own, "ecomm-fallback"
+        return own, "ecomm-fallback", True
     if images:
-        return images[0].url, "ecomm-fallback"
+        return images[0].url, "ecomm-fallback", True
     return None
 
 
@@ -424,16 +418,18 @@ def pick_size_image(images, colour, colour_product, size_index):
     leftover sizes reuse its first image (the meta one, if any). Only images
     whose alt NAMES the colour rotate — a [global] shot of another colour
     never becomes a main image. Products without a colour option rotate
-    through their whole gallery. Returns (url, label), or None when the
-    colour has no tagged images at all (the caller then falls back to
-    pick_single_image: the flexify.image_link metafield, variant image...)."""
+    through their images that HAVE alt text (user decision 2026-09-29:
+    untagged flat lays / packaging never become main images). Returns (url,
+    label), or None when nothing is tagged at all (the caller then falls
+    back to pick_single_image: the flexify.image_link metafield, variant
+    image...)."""
     if colour_product:
         meta = [m for m in images
                 if m.has_meta() and m.matches_colour(colour)]
         pool = [m for m in images if colour in m.named_colours()]
     else:
         meta = [m for m in images if m.has_meta()]
-        pool = images
+        pool = [m for m in images if m.alt.strip()]
     ordered, seen = [], set()
     for m in meta + pool:
         if m.url not in seen:
@@ -449,30 +445,31 @@ def pick_size_image(images, colour, colour_product, size_index):
     return chosen.url, "lifestyle-rule" if lifestyle else "ecomm-fallback"
 
 
-def build_item(variant, product, media, known_colours, size_index):
+def build_item(variant, product, media, size_index):
     colour = variant_colour(variant, product).lower()
     images = [m for m in media if m.type == "MediaImage" and m.url]
     videos = [m for m in media if m.type == "Video"]
 
     # ---- g:image_link ------------------------------------------------------
     # Meta gets a different image per size; Google keeps one per colour.
+    colour_product = has_colour_option(product)
     single = pick_single_image(variant, images, colour)
     if not single:
         return None  # nothing usable at all (product with zero media)
-    image_link, label = (pick_size_image(images, colour,
-                                         has_colour_option(product),
-                                         size_index)
-                         or single)
+    per_size = pick_size_image(images, colour, colour_product, size_index)
+    image_link, label = per_size or single[:2]
+    # Nothing tagged or picked: an untagged image went out — logged so the
+    # merch team can add a tag (user decision 2026-09-29).
+    needs_tag = per_size is None and single[2]
 
     # ---- g:additional_image_link ------------------------------------------
-    # Colour-option products get a colour-curated gallery; products with no
-    # colour concept carry the full gallery (user decision 2026-08-18).
-    if has_colour_option(product):
+    # Only images someone tagged (user decision 2026-09-29): the colour's own
+    # images plus [global] ones; for products without a colour option, images
+    # with any alt text. Untagged flat lays and packaging never appear.
+    if colour_product:
         gallery = [m.url for m in images if m.matches_colour(colour)]
-        if len(gallery) < 2:
-            gallery += [m.url for m in images if m.is_untagged(known_colours)]
     else:
-        gallery = [m.url for m in images]
+        gallery = [m.url for m in images if m.alt.strip()]
     seen = {image_link}
     additional = []
     for url in gallery:
@@ -507,6 +504,8 @@ def build_item(variant, product, media, known_colours, size_index):
         "additional_image_link": additional,
         "videos": video_urls,
         "custom_label_0": label,
+        "needs_tag": ((variant_colour(variant, product) if colour_product
+                       else "all sizes") if needs_tag else None),
     }
 
 
@@ -514,9 +513,6 @@ def build_items(products):
     items = []
     for product in products:
         media = [TaggedMedia(n) for n in product["media"]["nodes"]]
-        known_colours = set()
-        for v in product["variants"]["nodes"]:
-            known_colours.add(variant_colour(v, product).lower())
         # Each variant's position among its colour's sizes, in Shopify's
         # variant order (a product with no colour option is one group).
         colour_product = has_colour_option(product)
@@ -526,8 +522,7 @@ def build_items(products):
                    if colour_product else None)
             size_index = sizes_seen.get(key, 0)
             sizes_seen[key] = size_index + 1
-            item = build_item(variant, product, media, known_colours,
-                              size_index)
+            item = build_item(variant, product, media, size_index)
             if item:
                 items.append(item)
             else:
@@ -781,6 +776,13 @@ def main():
     for item in items:
         labels[item["custom_label_0"]] = labels.get(item["custom_label_0"], 0) + 1
     print("provenance:", ", ".join(f"{k}={v}" for k, v in sorted(labels.items())))
+
+    needs = sorted({(i["product_title"], i["needs_tag"])
+                    for i in items if i["needs_tag"]})
+    print(f"needs a tag: {len(needs)} colour(s) sent an untagged fallback "
+          "image — tag an image for each in Shopify:")
+    for title, colour in needs:
+        print(f"  {title} / {colour}")
 
     if args.check:
         ok = run_checks(items, args.flexify_file)

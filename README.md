@@ -51,19 +51,25 @@ lifestyle/on-model shot, `[global]` means "applies to every colour" — but a
 `[global]` shot of *another* colour never becomes a main image). If a colour
 has fewer images than sizes, the leftover sizes reuse its first image (the
 `meta` one, if any) — so tag more images for that colour to give every size
-its own. Products **without** a colour option rotate through their whole
-gallery (untagged images included), `meta`-tagged ones first.
+its own. Products **without** a colour option rotate through their images
+that **have alt text** (any text), `meta`-tagged ones first — an image with an
+empty alt (flat lays, packaging) is never sent.
 
 **Fallbacks**, for a colour with no tagged images at all: the legacy variant
 metafield `flexify.image_link` (~1,300 variants hold Flexify-era values;
 they keep working after Flexify is uninstalled because the data lives in the
-store), then the variant's own image. `flexify.video` sets videos the same
-way, comma-separated URLs.
+store), then a `[global]` image, then — last resort — the variant's own
+image. That last resort is usually an untagged flat lay, so every build
+**lists those colours in the Actions log under "needs a tag"**: tag an image
+for each and the next build picks it up. `flexify.video` sets videos the
+same way, comma-separated URLs.
 
-The gallery (`additional_image_link`, the Shops carousel): products **with**
-a Color/Colour option get a colour-curated gallery (images tagged for that
-colour or `[global]`); products **without** a colour option carry the full
-product gallery. Capped at 20, main image never duplicated.
+The gallery (`additional_image_link`, the Shops carousel) holds **only
+tagged images**: products **with** a Color/Colour option get the images
+tagged for that colour or `[global]`; products **without** a colour option
+get the images that have alt text. Untagged images never appear — a colour
+with a single tagged image gets no extra gallery images. Capped at 20, main
+image never duplicated.
 
 Changes take effect at the next hourly rebuild (or force one, above).
 
